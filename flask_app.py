@@ -4,8 +4,13 @@ import os
 
 app = Flask(__name__)
 
-# Render PostgreSQL Connection String (DATABASE_URL aap Render se lenge)
-app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('DATABASE_URL')
+# Render PostgreSQL Connection String
+# Agar DATABASE_URL 'postgres://' se shuru hoti hai toh use 'postgresql://' mein badalna padta hai
+db_url = os.environ.get('DATABASE_URL')
+if db_url and db_url.startswith("postgres://"):
+    db_url = db_url.replace("postgres://", "postgresql://", 1)
+
+app.config['SQLALCHEMY_DATABASE_URI'] = db_url
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
 db = SQLAlchemy(app)
@@ -25,6 +30,15 @@ class Student(db.Model):
     percentage = db.Column(db.String(10))
     status = db.Column(db.String(10))
 
+# --- DATABASE INITIALIZATION ROUTE ---
+@app.route("/init_db")
+def init_db():
+    try:
+        db.create_all()
+        return "✅ Database tables created successfully!"
+    except Exception as e:
+        return f"❌ Error: {str(e)}"
+
 @app.route("/", methods=["GET", "POST"])
 def index():
     student = None
@@ -32,16 +46,19 @@ def index():
     division = None
     if request.method == "POST":
         roll = request.form.get("roll_no")
-        student = Student.query.filter_by(roll_no=roll).first()
-        
-        if student:
-            perc = float(student.percentage.replace('%', ''))
-            if perc >= 60: division = "1st Division"
-            elif perc >= 45: division = "2nd Division"
-            elif perc >= 33: division = "3rd Division"
-            else: division = "Fail"
-        else:
-            error = "Roll Number not found!"
+        try:
+            student = Student.query.filter_by(roll_no=roll).first()
+            if student:
+                perc_str = student.percentage.replace('%', '')
+                perc = float(perc_str)
+                if perc >= 60: division = "1st Division"
+                elif perc >= 45: division = "2nd Division"
+                elif perc >= 33: division = "3rd Division"
+                else: division = "Fail"
+            else:
+                error = "Roll Number not found!"
+        except Exception:
+            error = "Database Error! Please run /init_db first."
             
     return render_template("index.html", student=student, error=error, division=division)
 
@@ -59,26 +76,29 @@ def upload_result():
         ex = int(request.form.get("extra") or 0)
 
         total = m + s + e + h + st + ex
+        # 5 subjects calculate (out of 500)
         per = round((total / 500) * 100, 2)
-        res_status = "PASS" if per >= 30 else "FAIL"
+        res_status = "PASS" if per >= 33 else "FAIL"
 
-        # Check if student already exists to update, else create new
-        existing_student = Student.query.filter_by(roll_no=roll).first()
-        if existing_student:
-            student = existing_student
-        else:
-            student = Student(roll_no=roll)
+        try:
+            existing_student = Student.query.filter_by(roll_no=roll).first()
+            if existing_student:
+                student = existing_student
+            else:
+                student = Student(roll_no=roll)
 
-        student.name = name
-        student.maths, student.science, student.english = m, s, e
-        student.hindi, student.sst, student.extra = h, st, ex
-        student.total = total
-        student.percentage = f"{per}%"
-        student.status = res_status
+            student.name = name
+            student.maths, student.science, student.english = m, s, e
+            student.hindi, student.sst, student.extra = h, st, ex
+            student.total = total
+            student.percentage = f"{per}%"
+            student.status = res_status
 
-        db.session.add(student)
-        db.session.commit()
-        message = f"✅ Success: Result Saved for {name}!"
+            db.session.add(student)
+            db.session.commit()
+            message = f"✅ Success: Result Saved for {name}!"
+        except Exception:
+            message = "❌ Database Error! Run /init_db."
 
     return render_template("upload.html", message=message)
 
@@ -101,7 +121,5 @@ def delete_student(roll_no):
     return redirect(url_for('admin'))
 
 if __name__ == "__main__":
-    with app.app_context():
-        db.create_all() # Yeh line apne aap table bana degi
     app.run(debug=True)
-  
+    
